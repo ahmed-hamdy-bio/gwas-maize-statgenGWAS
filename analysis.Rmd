@@ -1,0 +1,143 @@
+---
+title: "Genome-wide association study (GWAS) in maize with statgenGWAS"
+subtitle: "Grain yield and flowering time in the DROPS dataset"
+author: "Ahmed Hamdy"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.width = 8, fig.height = 5)
+set.seed(123)
+```
+
+## 1. Question and data
+
+**Question:** which genomic regions are associated with grain yield and
+flowering time (anthesis) in maize?
+
+**Data:** the public DROPS dataset shipped with the `statgenGWAS` package
+(European DROPS project): 246 maize genotypes, about 42,000 SNP markers with
+chromosome positions, and phenotypes measured in several field trials. This
+analysis uses trial `Mur13W`.
+
+```{r libs}
+library(statgenGWAS)
+library(ggplot2)
+```
+
+## 2. Build the genomic data object
+
+```{r gdata}
+data("dropsMarkers")
+data("dropsMap")
+data("dropsPheno")
+
+# Genotype names as row names, drop the helper column
+rownames(dropsMarkers) <- dropsMarkers[["Ind"]]
+dropsMarkers <- dropsMarkers[colnames(dropsMarkers) != "Ind"]
+
+# Marker map: SNP names as row names, standard column names
+rownames(dropsMap) <- dropsMap[["SNP.names"]]
+colnames(dropsMap)[match(c("Chromosome", "Position"),
+                         colnames(dropsMap))] <- c("chr", "pos")
+
+# Phenotypes: one data.frame per trial
+colnames(dropsPheno)[colnames(dropsPheno) == "Variety_ID"] <- "genotype"
+dropsPhenoList <- split(
+  x = dropsPheno[c("genotype", "grain.yield", "grain.number", "seed.size",
+                   "anthesis", "silking", "plant.height",
+                   "tassel.height", "ear.height")],
+  f = dropsPheno[["Experiment"]])
+
+gDataDrops <- createGData(geno = dropsMarkers, map = dropsMap,
+                          pheno = dropsPhenoList)
+```
+
+## 3. Marker quality control
+
+`codeMarkers` removes duplicate SNPs and markers with too many missing values.
+
+```{r qc}
+gDataDropsDedup <- codeMarkers(gDataDrops, impute = FALSE, verbose = TRUE)
+summary(gDataDropsDedup)
+```
+
+## 4. Phenotype distributions
+
+```{r pheno}
+pheno <- gDataDropsDedup$pheno[["Mur13W"]]
+par(mfrow = c(1, 2))
+hist(pheno$grain.yield, breaks = 25, col = "grey70",
+     main = "Grain yield (Mur13W)", xlab = "grain.yield")
+hist(pheno$anthesis, breaks = 25, col = "grey70",
+     main = "Anthesis (Mur13W)", xlab = "anthesis")
+par(mfrow = c(1, 1))
+```
+
+## 5. Single-trait GWAS
+
+`runSingleTraitGwas` fits a linear mixed model with a kinship matrix to account
+for relatedness between genotypes, which reduces false positives caused by
+population structure.
+
+```{r gwas}
+GWASDrops <- runSingleTraitGwas(gData = gDataDropsDedup,
+                                trials = "Mur13W",
+                                traits = c("grain.yield", "anthesis"))
+summary(GWASDrops)
+```
+
+## 6. QQ plots
+
+If the model controls population structure, p-values should follow the diagonal
+except for a few true associations at the tail.
+
+```{r qq}
+plot(GWASDrops, plotType = "qq", trait = "grain.yield")
+plot(GWASDrops, plotType = "qq", trait = "anthesis")
+```
+
+## 7. Manhattan plots
+
+```{r manhattan}
+plot(GWASDrops, plotType = "manhattan", trait = "grain.yield")
+plot(GWASDrops, plotType = "manhattan", trait = "anthesis")
+```
+
+## 8. Significant SNPs across traits
+
+```{r qtl}
+plot(GWASDrops, plotType = "qtl", yThr = 4, normalize = TRUE)
+```
+
+## 9. Export results
+
+```{r export}
+dir.create("results", showWarnings = FALSE)
+res <- GWASDrops$GWAResult[["Mur13W"]]
+if (!is.null(res)) {
+  write.csv(res, "results/gwas_Mur13W_all_snps.csv", row.names = FALSE)
+}
+names(GWASDrops)
+head(res)
+```
+
+## 10. Limitations
+
+- 246 genotypes and a single trial give limited power; small-effect loci are
+  likely missed.
+- Significant SNPs are candidate regions, not proven causal variants. Validating
+  them would need independent data or functional work.
+- Results come from one trial; effects can change across environments.
+
+## 11. Reproducibility
+
+```{r session}
+sessionInfo()
+```
